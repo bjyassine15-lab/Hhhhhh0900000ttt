@@ -205,7 +205,7 @@ fun MainDialerScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 20.dp),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = 180.dp), // Generous bottom padding to scroll past floating mic
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 260.dp), // Increased bottom padding to prevent overlap with giant floating microphone
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {

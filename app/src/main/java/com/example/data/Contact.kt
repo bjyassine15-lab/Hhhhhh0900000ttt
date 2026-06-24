@@ -9,5 +9,6 @@ data class Contact(
     val name: String,
     val phoneNumber: String,
     val imagePath: String?, // Internal file path to contact photo
-    val voiceTagPath: String? // Internal file path to recorded voice tag (PCM or WAV)
+    val voiceTagPath: String?, // Internal file path to recorded voice tag (PCM or WAV)
+    val voiceEmbedding: String? = null // Serialized DoubleArray vector of speech embeddings
 )

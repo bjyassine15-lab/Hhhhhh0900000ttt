@@ -2,12 +2,14 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -78,6 +80,37 @@ fun CaregiverSetupScreen(
             } catch (e: Exception) {
                 Toast.makeText(context, "فشل تحميل الصورة", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    // Backup & Restore Launcher
+    val restoreLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            viewModel.restoreData(
+                zipUri = uri,
+                onSuccess = {
+                    Toast.makeText(context, "تمت استعادة البيانات والملفات بنجاح!", Toast.LENGTH_LONG).show()
+                },
+                onError = { error ->
+                    Toast.makeText(context, "فشل استعادة البيانات: $error", Toast.LENGTH_LONG).show()
+                }
+            )
+        }
+    }
+
+    val shareBackupFile = { file: File ->
+        try {
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "مشاركة النسخة الاحتياطية"))
+        } catch (e: Exception) {
+            Toast.makeText(context, "فشل في مشاركة الملف: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -566,6 +599,98 @@ fun CaregiverSetupScreen(
                                 ),
                                 modifier = Modifier.testTag("sensitivity_slider")
                             )
+                        }
+                    }
+                }
+
+                // Backup & Restore Card
+                item {
+                    Card(
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2D35)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Backup,
+                                    contentDescription = null,
+                                    tint = Color(0xFF10B981),
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Text(
+                                    "نسخ واستعادة البيانات",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFE2E2E6)
+                                )
+                            }
+
+                            Text(
+                                "يمكنك نسخ جميع البيانات والملفات الصوتية والـ Embeddings احتياطياً ونقلها إلى هاتف آخر أو استعادتها بأي وقت.",
+                                fontSize = 12.sp,
+                                color = Color(0xFFA1A2A6)
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        viewModel.backupData(
+                                            onSuccess = { file ->
+                                                shareBackupFile(file)
+                                            },
+                                            onError = { error ->
+                                                Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                                            }
+                                        )
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("backup_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Share,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("نسخ البيانات", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        restoreLauncher.launch("application/zip")
+                                    },
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE2E2E6)),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x33FFFFFF)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("restore_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CloudDownload,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("استعادة البيانات", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     }
                 }

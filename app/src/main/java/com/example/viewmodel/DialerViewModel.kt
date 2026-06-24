@@ -7,7 +7,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.audio.AudioMatcher
+import com.example.audio.EmbeddingMatcher
 import com.example.audio.AudioPlayerHelper
 import com.example.audio.AudioRecordHelper
 import com.example.audio.GeminiTtsService
@@ -19,8 +19,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.util.UUID
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 sealed interface DialerUiState {
     object Idle : DialerUiState
@@ -129,8 +136,8 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                 return
             }
 
-            // Perform matching using high-fidelity AudioMatcher
-            val bestContact = AudioMatcher.findBestMatch(
+            // Perform matching using high-fidelity EmbeddingMatcher
+            val bestContact = EmbeddingMatcher.findBestMatch(
                 recordedAudio = queryRawAudio,
                 contacts = currentContacts,
                 sensitivityPercentage = sensitivity.value.toDouble()
@@ -248,11 +255,17 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                 tempVoiceFile.copyTo(destVoiceFile, overwrite = true)
                 val finalVoicePath = destVoiceFile.absolutePath
 
+                // Generate Embedding from saved voice tag
+                val rawAudio = AudioRecordHelper.readPcmData(destVoiceFile)
+                val embedding = EmbeddingMatcher.generateEmbedding(rawAudio)
+                val embeddingString = EmbeddingMatcher.embeddingToString(embedding)
+
                 val contact = Contact(
                     name = name.trim(),
                     phoneNumber = phoneNumber.trim(),
                     imagePath = finalImagePath,
-                    voiceTagPath = finalVoicePath
+                    voiceTagPath = finalVoicePath,
+                    voiceEmbedding = embeddingString
                 )
 
                 repository.insert(contact)
@@ -322,6 +335,7 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
 
                 // Handle Voice
                 var finalVoicePath = existingContact.voiceTagPath
+                var finalVoiceEmbedding = existingContact.voiceEmbedding
                 if (tempVoiceFile != null && tempVoiceFile.exists()) {
                     // Delete old voice tag if it exists
                     existingContact.voiceTagPath?.let { oldPath ->
@@ -331,6 +345,11 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                     val destVoiceFile = File(internalFilesDir, "contact_voice_${UUID.randomUUID()}.pcm")
                     tempVoiceFile.copyTo(destVoiceFile, overwrite = true)
                     finalVoicePath = destVoiceFile.absolutePath
+
+                    // Generate Embedding from saved voice tag
+                    val rawAudio = AudioRecordHelper.readPcmData(destVoiceFile)
+                    val embedding = EmbeddingMatcher.generateEmbedding(rawAudio)
+                    finalVoiceEmbedding = EmbeddingMatcher.embeddingToString(embedding)
                 }
 
                 if (finalVoicePath == null) {
@@ -342,7 +361,8 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                     name = name.trim(),
                     phoneNumber = phoneNumber.trim(),
                     imagePath = finalImagePath,
-                    voiceTagPath = finalVoicePath
+                    voiceTagPath = finalVoicePath,
+                    voiceEmbedding = finalVoiceEmbedding
                 )
 
                 repository.update(updatedContact)
@@ -389,6 +409,111 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun stopPlayingVoice() {
         audioPlayerHelper.stopPlaying()
+    }
+
+    fun backupData(onSuccess: (File) -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val context = getApplication<Application>()
+                
+                // Flush database transactions by shutting it down temporarily
+                ContactDatabase.getDatabase(context).close()
+                
+                val backupFile = File(context.cacheDir, "mima_backup.zip")
+                if (backupFile.exists()) backupFile.delete()
+
+                ZipOutputStream(BufferedOutputStream(FileOutputStream(backupFile))).use { out ->
+                    // Zip Room Database files
+                    val dbFile = context.getDatabasePath("contact_database")
+                    val dbParent = dbFile.parentFile
+                    if (dbParent != null && dbParent.exists()) {
+                        val dbFiles = dbParent.listFiles { _, name -> name.startsWith("contact_database") } ?: emptyArray()
+                        for (file in dbFiles) {
+                            if (file.exists() && file.isFile) {
+                                out.putNextEntry(ZipEntry("db/${file.name}"))
+                                BufferedInputStream(FileInputStream(file)).use { input ->
+                                    input.copyTo(out)
+                                }
+                                out.closeEntry()
+                            }
+                        }
+                    }
+
+                    // Zip internal files (voice tags and contact photos)
+                    val files = context.filesDir.listFiles() ?: emptyArray()
+                    for (file in files) {
+                        if (file.exists() && file.isFile) {
+                            out.putNextEntry(ZipEntry("files/${file.name}"))
+                            BufferedInputStream(FileInputStream(file)).use { input ->
+                                input.copyTo(out)
+                            }
+                            out.closeEntry()
+                        }
+                    }
+                }
+
+                launch(Dispatchers.Main) {
+                    onSuccess(backupFile)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error generating backup zip", e)
+                launch(Dispatchers.Main) {
+                    onError("فشل إنشاء نسخة احتياطية: ${e.localizedMessage}")
+                }
+            }
+        }
+    }
+
+    fun restoreData(zipUri: Uri, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val context = getApplication<Application>()
+                
+                // Close current connection
+                ContactDatabase.getDatabase(context).close()
+
+                val contentResolver = context.contentResolver
+                contentResolver.openInputStream(zipUri)?.use { inputStream ->
+                    ZipInputStream(BufferedInputStream(inputStream)).use { zis ->
+                        var entry = zis.nextEntry
+                        while (entry != null) {
+                            val name = entry.name
+                            if (!entry.isDirectory) {
+                                if (name.startsWith("db/")) {
+                                    val dbFileName = name.substringAfter("db/")
+                                    val destDbFile = context.getDatabasePath(dbFileName)
+                                    destDbFile.parentFile?.mkdirs()
+                                    FileOutputStream(destDbFile).use { fos ->
+                                        zis.copyTo(fos)
+                                    }
+                                } else if (name.startsWith("files/")) {
+                                    val fileName = name.substringAfter("files/")
+                                    val destFile = File(context.filesDir, fileName)
+                                    destFile.parentFile?.mkdirs()
+                                    FileOutputStream(destFile).use { fos ->
+                                        zis.copyTo(fos)
+                                    }
+                                }
+                            }
+                            zis.closeEntry()
+                            entry = zis.nextEntry
+                        }
+                    }
+                }
+
+                // Re-open/initialize database
+                ContactDatabase.getDatabase(context)
+
+                launch(Dispatchers.Main) {
+                    onSuccess()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error restoring backup", e)
+                launch(Dispatchers.Main) {
+                    onError("فشل استعادة البيانات: ${e.localizedMessage}")
+                }
+            }
+        }
     }
 
     override fun onCleared() {
