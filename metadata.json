@@ -1,5 +1,5 @@
 {
-  "name": "Easy Dialer",
+  "name": "ميمة",
   "description": "A voice-to-voice dialer designed for the elderly using image-grid contacts and Dynamic Time Warping matching.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

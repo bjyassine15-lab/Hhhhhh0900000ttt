@@ -57,6 +57,7 @@ fun CaregiverSetupScreen(
 
     var name by remember { mutableStateOf("") }
     var phoneNumber by remember { mutableStateOf("") }
+    var editingContact by remember { mutableStateOf<Contact?>(null) }
 
     // Media states
     var selectedImageFile by remember { mutableStateOf<File?>(null) }
@@ -77,6 +78,82 @@ fun CaregiverSetupScreen(
             } catch (e: Exception) {
                 Toast.makeText(context, "فشل تحميل الصورة", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    // Contacts Permission & Picker Launchers
+    var hasContactsPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_CONTACTS
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val contactsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            hasContactsPermission = isGranted
+            if (isGranted) {
+                Toast.makeText(context, "تم منح الصلاحية بنجاح", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "مطلوب صلاحية الوصول لجهات الاتصال", Toast.LENGTH_SHORT).show()
+            }
+        }
+    )
+
+    val contactPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickContact()
+    ) { contactUri: Uri? ->
+        contactUri?.let { uri ->
+            try {
+                val cursor = context.contentResolver.query(uri, null, null, null, null)
+                cursor?.use { c ->
+                    if (c.moveToFirst()) {
+                        val idIndex = c.getColumnIndex(android.provider.ContactsContract.Contacts._ID)
+                        val nameIndex = c.getColumnIndex(android.provider.ContactsContract.Contacts.DISPLAY_NAME)
+                        
+                        val cId = if (idIndex >= 0) c.getString(idIndex) else ""
+                        val cName = if (nameIndex >= 0) c.getString(nameIndex) else ""
+                        
+                        name = cName
+                        
+                        val hasPhoneIndex = c.getColumnIndex(android.provider.ContactsContract.Contacts.HAS_PHONE_NUMBER)
+                        val hasPhone = if (hasPhoneIndex >= 0) c.getString(hasPhoneIndex) else "0"
+                        if (hasPhone == "1") {
+                            val phoneCursor = context.contentResolver.query(
+                                android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                                null,
+                                android.provider.ContactsContract.CommonDataKinds.Phone.CONTACT_ID + " = ?",
+                                arrayOf(cId),
+                                null
+                            )
+                            phoneCursor?.use { pc ->
+                                if (pc.moveToFirst()) {
+                                    val numberIndex = pc.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
+                                    if (numberIndex >= 0) {
+                                        val rawNumber = pc.getString(numberIndex)
+                                        phoneNumber = rawNumber.replace(" ", "").replace("-", "")
+                                    }
+                                }
+                            }
+                        }
+                        Toast.makeText(context, "تم استيراد جهة الاتصال: $cName", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "فشل استيراد جهة الاتصال", Toast.LENGTH_SHORT).show()
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun launchContactPicker() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+            contactPickerLauncher.launch(null)
+        } else {
+            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
         }
     }
 
@@ -154,7 +231,7 @@ fun CaregiverSetupScreen(
                     .fillMaxSize()
                     .padding(horizontal = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
-                contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp)
+                contentPadding = PaddingValues(top = 16.dp, bottom = 120.dp)
             ) {
                 // ADD CONTACT FORM CARD
                 item {
@@ -169,7 +246,7 @@ fun CaregiverSetupScreen(
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             Text(
-                                "إضافة جهة اتصال جديدة",
+                                if (editingContact == null) "إضافة جهة اتصال جديدة" else "تعديل جهة اتصال: ${editingContact!!.name}",
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFFE2E2E6),
@@ -189,6 +266,18 @@ fun CaregiverSetupScreen(
                             ) {
                                 if (selectedImageFile != null && selectedImageFile!!.exists()) {
                                     val bitmap = BitmapFactory.decodeFile(selectedImageFile!!.absolutePath)
+                                    if (bitmap != null) {
+                                        Image(
+                                            bitmap = bitmap.asImageBitmap(),
+                                            contentDescription = "Selected Photo",
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Icon(Icons.Default.AddAPhoto, contentDescription = null, tint = Color.White, modifier = Modifier.size(36.dp))
+                                    }
+                                } else if (editingContact?.imagePath != null && File(editingContact!!.imagePath!!).exists()) {
+                                    val bitmap = BitmapFactory.decodeFile(editingContact!!.imagePath)
                                     if (bitmap != null) {
                                         Image(
                                             bitmap = bitmap.asImageBitmap(),
@@ -228,26 +317,46 @@ fun CaregiverSetupScreen(
                                 )
                             )
 
-                            // Phone input
-                            OutlinedTextField(
-                                value = phoneNumber,
-                                onValueChange = { phoneNumber = it },
-                                label = { Text("رقم الهاتف الفعلي", color = Color(0xFFA1A2A6)) },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                                textStyle = LocalTextStyle.current.copy(color = Color.White),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("phone_input"),
-                                colors = TextFieldDefaults.colors(
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White,
-                                    focusedContainerColor = Color(0xFF111318),
-                                    unfocusedContainerColor = Color(0xFF111318),
-                                    focusedIndicatorColor = Color(0xFFD3E3FD),
-                                    unfocusedIndicatorColor = Color(0x33FFFFFF)
-                                )
-                            )
+                            // Phone input with integrated Phone Contact Picker
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                             ) {
+                                 OutlinedTextField(
+                                     value = phoneNumber,
+                                     onValueChange = { phoneNumber = it },
+                                     label = { Text("رقم الهاتف الفعلي", color = Color(0xFFA1A2A6)) },
+                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                                     textStyle = LocalTextStyle.current.copy(color = Color.White),
+                                     shape = RoundedCornerShape(12.dp),
+                                     modifier = Modifier
+                                         .weight(1f)
+                                         .testTag("phone_input"),
+                                     colors = TextFieldDefaults.colors(
+                                         focusedTextColor = Color.White,
+                                         unfocusedTextColor = Color.White,
+                                         focusedContainerColor = Color(0xFF111318),
+                                         unfocusedContainerColor = Color(0xFF111318),
+                                         focusedIndicatorColor = Color(0xFFD3E3FD),
+                                         unfocusedIndicatorColor = Color(0x33FFFFFF)
+                                     )
+                                 )
+
+                                 Button(
+                                     onClick = { launchContactPicker() },
+                                     shape = RoundedCornerShape(12.dp),
+                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                                     modifier = Modifier
+                                         .height(56.dp)
+                                         .testTag("import_contact_button"),
+                                     contentPadding = PaddingValues(horizontal = 16.dp)
+                                 ) {
+                                     Icon(Icons.Default.Contacts, contentDescription = "استيراد")
+                                     Spacer(modifier = Modifier.width(4.dp))
+                                     Text("استيراد", fontSize = 14.sp)
+                                 }
+                             }
 
                             Divider(color = Color(0x1AFFFFFF))
 
@@ -295,9 +404,10 @@ fun CaregiverSetupScreen(
                                 }
 
                                 // Preview recorded voice tag button
-                                if (hasVoiceTag && tempVoiceFile != null) {
+                                val voiceFileToPlay = tempVoiceFile ?: editingContact?.voiceTagPath?.let { File(it) }
+                                if (voiceFileToPlay != null && voiceFileToPlay.exists()) {
                                     IconButton(
-                                        onClick = { viewModel.playRecordedVoice(tempVoiceFile!!) },
+                                        onClick = { viewModel.playRecordedVoice(voiceFileToPlay) },
                                         modifier = Modifier
                                             .size(50.dp)
                                             .background(Color(0xFF10B981), RoundedCornerShape(12.dp))
@@ -314,37 +424,148 @@ fun CaregiverSetupScreen(
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            // Save Contact Submit Button
-                            Button(
-                                onClick = {
-                                    viewModel.saveContact(
-                                        name = name,
-                                        phoneNumber = phoneNumber,
-                                        tempImageFile = selectedImageFile,
-                                        tempVoiceFile = tempVoiceFile,
-                                        onSuccess = {
-                                            Toast.makeText(context, "تم حفظ جهة الاتصال بنجاح", Toast.LENGTH_SHORT).show()
-                                            // Reset fields
+                            // Save Contact Submit or Edit submit layout
+                            if (editingContact == null) {
+                                Button(
+                                    onClick = {
+                                        viewModel.saveContact(
+                                            name = name,
+                                            phoneNumber = phoneNumber,
+                                            tempImageFile = selectedImageFile,
+                                            tempVoiceFile = tempVoiceFile,
+                                            onSuccess = {
+                                                Toast.makeText(context, "تم حفظ جهة الاتصال بنجاح", Toast.LENGTH_SHORT).show()
+                                                // Reset fields
+                                                name = ""
+                                                phoneNumber = ""
+                                                selectedImageFile = null
+                                                tempVoiceFile = null
+                                                hasVoiceTag = false
+                                            },
+                                            onError = { error ->
+                                                Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                                            }
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(56.dp)
+                                        .testTag("save_contact_button")
+                                ) {
+                                    Text("حفظ جهة الاتصال", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                }
+                            } else {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            viewModel.updateContact(
+                                                contactId = editingContact!!.id,
+                                                name = name,
+                                                phoneNumber = phoneNumber,
+                                                tempImageFile = selectedImageFile,
+                                                keepOldImage = true,
+                                                tempVoiceFile = tempVoiceFile,
+                                                onSuccess = {
+                                                    Toast.makeText(context, "تم تعديل جهة الاتصال بنجاح", Toast.LENGTH_SHORT).show()
+                                                    editingContact = null
+                                                    name = ""
+                                                    phoneNumber = ""
+                                                    selectedImageFile = null
+                                                    tempVoiceFile = null
+                                                    hasVoiceTag = false
+                                                },
+                                                onError = { error ->
+                                                    Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                                                }
+                                            )
+                                        },
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(56.dp)
+                                            .testTag("update_contact_button")
+                                    ) {
+                                        Text("حفظ التعديلات", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            editingContact = null
                                             name = ""
                                             phoneNumber = ""
                                             selectedImageFile = null
                                             tempVoiceFile = null
                                             hasVoiceTag = false
                                         },
-                                        onError = { error ->
-                                            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
-                                        }
-                                    )
-                                },
-                                shape = RoundedCornerShape(16.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(56.dp)
-                                    .testTag("save_contact_button")
-                            ) {
-                                Text("حفظ جهة الاتصال", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(56.dp)
+                                            .testTag("cancel_edit_button")
+                                    ) {
+                                        Text("إلغاء التعديل", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
                             }
+                        }
+                    }
+                }
+
+                // Voice Match Sensitivity Slider Card
+                item {
+                    val sensitivity by viewModel.sensitivity.collectAsState()
+                    Card(
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2D35)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "حساسية مطابقة الصوت",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFE2E2E6)
+                                )
+                                Text(
+                                    "${sensitivity.toInt()}%",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF3B82F6)
+                                )
+                            }
+                            
+                            Text(
+                                "تتحكم هذه القيمة في مدى دقة مطابقة الصوت لجهات الاتصال. القيمة الأعلى تتطلب نطقاً أكثر دقة، والقيمة الأقل تجعل المطابقة أسهل.",
+                                fontSize = 12.sp,
+                                color = Color(0xFFA1A2A6)
+                            )
+                            
+                            Slider(
+                                value = sensitivity,
+                                onValueChange = { viewModel.updateSensitivity(it) },
+                                valueRange = 40f..95f,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color(0xFF3B82F6),
+                                    activeTrackColor = Color(0xFF3B82F6),
+                                    inactiveTrackColor = Color(0x33FFFFFF)
+                                ),
+                                modifier = Modifier.testTag("sensitivity_slider")
+                            )
                         }
                     }
                 }
@@ -381,6 +602,14 @@ fun CaregiverSetupScreen(
                     items(contacts) { contact ->
                         ContactSetupItemRow(
                             contact = contact,
+                            onClick = {
+                                editingContact = contact
+                                name = contact.name
+                                phoneNumber = contact.phoneNumber
+                                selectedImageFile = null
+                                tempVoiceFile = null
+                                hasVoiceTag = contact.voiceTagPath != null
+                            },
                             onPlayVoice = {
                                 contact.voiceTagPath?.let { path ->
                                     viewModel.playRecordedVoice(File(path))
@@ -398,13 +627,16 @@ fun CaregiverSetupScreen(
 @Composable
 fun ContactSetupItemRow(
     contact: Contact,
+    onClick: () -> Unit,
     onPlayVoice: () -> Unit,
     onDelete: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2D35)),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
     ) {
         Row(
             modifier = Modifier

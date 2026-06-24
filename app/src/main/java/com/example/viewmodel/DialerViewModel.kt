@@ -44,6 +44,15 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
         initialValue = emptyList()
     )
 
+    private val prefs = application.getSharedPreferences("mima_prefs", Context.MODE_PRIVATE)
+    private val _sensitivity = MutableStateFlow(prefs.getFloat("sensitivity", 70f))
+    val sensitivity: StateFlow<Float> = _sensitivity.asStateFlow()
+
+    fun updateSensitivity(value: Float) {
+        _sensitivity.value = value
+        prefs.edit().putFloat("sensitivity", value).apply()
+    }
+
     private val _uiState = MutableStateFlow<DialerUiState>(DialerUiState.Idle)
     val uiState: StateFlow<DialerUiState> = _uiState.asStateFlow()
 
@@ -111,7 +120,7 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         try {
-            // Read and trim query file
+            // Read query file PCM
             val queryRawAudio = AudioRecordHelper.readPcmData(queryFile)
             if (queryRawAudio.isEmpty()) {
                 _uiState.value = DialerUiState.MatchingFailed("الملف الصوتي فارغ")
@@ -120,44 +129,19 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                 return
             }
 
-            val queryFeatures = AudioMatcher.extractFeatures(queryRawAudio)
-            if (queryFeatures.isEmpty()) {
-                _uiState.value = DialerUiState.MatchingFailed("لم يتم كشف كلام في التسجيل")
-                delay(2000)
-                _uiState.value = DialerUiState.Idle
-                return
-            }
+            // Perform matching using high-fidelity AudioMatcher
+            val bestContact = AudioMatcher.findBestMatch(
+                recordedAudio = queryRawAudio,
+                contacts = currentContacts,
+                sensitivityPercentage = sensitivity.value.toDouble()
+            )
 
-            var bestContact: Contact? = null
-            var minDistance = Double.MAX_VALUE
-
-            // Compare with all stored contacts
-            for (contact in currentContacts) {
-                val voiceTagPath = contact.voiceTagPath ?: continue
-                val tagFile = File(voiceTagPath)
-                if (!tagFile.exists()) continue
-
-                val tagRawAudio = AudioRecordHelper.readPcmData(tagFile)
-                val tagFeatures = AudioMatcher.extractFeatures(tagRawAudio)
-                if (tagFeatures.isEmpty()) continue
-
-                val distance = AudioMatcher.computeDtwDistance(queryFeatures, tagFeatures)
-                Log.d(TAG, "Contact ${contact.name}: DTW distance = $distance")
-
-                if (distance < minDistance) {
-                    minDistance = distance
-                    bestContact = contact
-                }
-            }
-
-            Log.d(TAG, "Best match found: ${bestContact?.name} with distance $minDistance (Threshold: $MAX_DTW_THRESHOLD)")
-
-            if (bestContact != null && minDistance <= MAX_DTW_THRESHOLD) {
+            if (bestContact != null) {
                 startCallCountdown(bestContact)
             } else {
-                Log.d(TAG, "Matching failed - minimum distance $minDistance exceeds threshold")
-                _uiState.value = DialerUiState.MatchingFailed("صوت غير معروف")
-                ttsService.speak("لم يتم التعرف على الصوت. الرجاء المحاولة مجددا")
+                Log.d(TAG, "Matching failed - no contact matched current sensitivity threshold of ${sensitivity.value}%")
+                _uiState.value = DialerUiState.MatchingFailed("الاسم غير موجود، يرجى إعادة المحاولة")
+                ttsService.speak("الاسم غير موجود، يرجى إعادة المحاولة")
                 delay(3000)
                 _uiState.value = DialerUiState.Idle
             }
@@ -288,6 +272,96 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                 Log.e(TAG, "Error saving contact", e)
                 launch(Dispatchers.Main) {
                     onError("حدث خطأ أثناء حفظ جهة الاتصال")
+                }
+            }
+        }
+    }
+
+    fun updateContact(
+        contactId: Int,
+        name: String,
+        phoneNumber: String,
+        tempImageFile: File?,
+        keepOldImage: Boolean,
+        tempVoiceFile: File?,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (name.isBlank() || phoneNumber.isBlank()) {
+                launch(Dispatchers.Main) { onError("يرجى ملء جميع الحقول") }
+                return@launch
+            }
+
+            try {
+                val context = getApplication<Application>()
+                val internalFilesDir = context.filesDir
+                val existingContact = repository.getById(contactId) ?: run {
+                    launch(Dispatchers.Main) { onError("جهة الاتصال غير موجودة") }
+                    return@launch
+                }
+
+                // Handle Image
+                var finalImagePath = existingContact.imagePath
+                if (tempImageFile != null && tempImageFile.exists()) {
+                    // Delete old image if it exists
+                    existingContact.imagePath?.let { oldPath ->
+                        val oldFile = File(oldPath)
+                        if (oldFile.exists()) oldFile.delete()
+                    }
+                    val destImageFile = File(internalFilesDir, "contact_img_${UUID.randomUUID()}.jpg")
+                    tempImageFile.copyTo(destImageFile, overwrite = true)
+                    finalImagePath = destImageFile.absolutePath
+                } else if (!keepOldImage) {
+                    existingContact.imagePath?.let { oldPath ->
+                        val oldFile = File(oldPath)
+                        if (oldFile.exists()) oldFile.delete()
+                    }
+                    finalImagePath = null
+                }
+
+                // Handle Voice
+                var finalVoicePath = existingContact.voiceTagPath
+                if (tempVoiceFile != null && tempVoiceFile.exists()) {
+                    // Delete old voice tag if it exists
+                    existingContact.voiceTagPath?.let { oldPath ->
+                        val oldFile = File(oldPath)
+                        if (oldFile.exists()) oldFile.delete()
+                    }
+                    val destVoiceFile = File(internalFilesDir, "contact_voice_${UUID.randomUUID()}.pcm")
+                    tempVoiceFile.copyTo(destVoiceFile, overwrite = true)
+                    finalVoicePath = destVoiceFile.absolutePath
+                }
+
+                if (finalVoicePath == null) {
+                    launch(Dispatchers.Main) { onError("البصمة الصوتية مطلوبة") }
+                    return@launch
+                }
+
+                val updatedContact = existingContact.copy(
+                    name = name.trim(),
+                    phoneNumber = phoneNumber.trim(),
+                    imagePath = finalImagePath,
+                    voiceTagPath = finalVoicePath
+                )
+
+                repository.update(updatedContact)
+
+                // Clean up temporary files
+                try {
+                    tempImageFile?.delete()
+                    tempVoiceFile?.delete()
+                } catch (e: Exception) {
+                    // ignore
+                }
+
+                launch(Dispatchers.Main) {
+                    onSuccess()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating contact", e)
+                launch(Dispatchers.Main) {
+                    onError("حدث خطأ أثناء تعديل جهة الاتصال")
                 }
             }
         }

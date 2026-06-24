@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
@@ -123,7 +124,6 @@ fun MainDialerScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(bottom = 160.dp) // Leave more space for the giant mic button
         ) {
             // Header: Minimal settings gear at the top right, zero text.
             Row(
@@ -205,7 +205,7 @@ fun MainDialerScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 20.dp),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 180.dp), // Generous bottom padding to scroll past floating mic
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
@@ -443,7 +443,7 @@ fun PlaceholderContactImage() {
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            imageVector = Icons.Default.Phone,
+            imageVector = Icons.Default.Person,
             contentDescription = "Default Contact",
             tint = Color(0xFFD3E3FD),
             modifier = Modifier.size(64.dp)
@@ -475,13 +475,13 @@ fun ContactCircularImage(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    Icon(Icons.Default.Phone, contentDescription = null, tint = Color(0xFFD3E3FD), modifier = Modifier.size(64.dp))
+                    Icon(Icons.Default.Person, contentDescription = null, tint = Color(0xFFD3E3FD), modifier = Modifier.size(64.dp))
                 }
             } else {
-                Icon(Icons.Default.Phone, contentDescription = null, tint = Color(0xFFD3E3FD), modifier = Modifier.size(64.dp))
+                Icon(Icons.Default.Person, contentDescription = null, tint = Color(0xFFD3E3FD), modifier = Modifier.size(64.dp))
             }
         } else {
-            Icon(Icons.Default.Phone, contentDescription = null, tint = Color(0xFFD3E3FD), modifier = Modifier.size(64.dp))
+            Icon(Icons.Default.Person, contentDescription = null, tint = Color(0xFFD3E3FD), modifier = Modifier.size(64.dp))
         }
     }
 }
